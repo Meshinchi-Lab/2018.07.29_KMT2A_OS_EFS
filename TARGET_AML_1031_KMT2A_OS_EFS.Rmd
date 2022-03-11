@@ -1,0 +1,228 @@
+---
+title: ''
+author: "Jenny Smith"
+date: ", 2018"
+output: html_document
+---
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.height=5, fig.width=8)
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/Clinical/analysis/2018.07.29_KMT2A_OS_EFS')
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/survival_analysis/Survplot_Functions_2017.03.31.r")
+```
+
+
+
+#Read in the Clinical Data
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_7.06.2018.csv")
+
+head(CDE.1031[,1:5])
+```
+
+
+```{r}
+KMT2A <- read.csv("/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/Clinical/analysis/2018.07.29_KMT2A_OS_EFS/CDEs_with_KMT2Ainfo_RBS_RNA-Seq_07.26.2018.csv")
+
+KMT2A$USI <- KMT2A$X
+head(KMT2A[,1:5])
+```
+
+```{r}
+table(KMT2A$KMT2A.Fusion.Partner)
+```
+
+```{r}
+tab <- table(KMT2A$KMT2A.Fusion.Partner)
+excl <- paste(names(tab[tab==1]), collapse = "|")
+excl
+```
+
+
+#Clean the CDEs
+
+```{r}
+CDE.1031.sub <- CDE.1031 %>%
+  filter(!is.na(EFS.time..days.)) %>%
+  filter(! USI %in% KMT2A$USI) %>%
+  filter(!MLL == "Yes") %>% #800 AML remain
+  filter(!grepl("KMT2A-|-KMT2A", All.Fusions.Detected)) #795 total 
+
+
+# head(CDE.1031.sub)
+dim(CDE.1031.sub)
+```
+
+
+```{r}
+KMT2A.sub <- KMT2A %>%
+  filter(!grepl(excl, KMT2A.Fusion.Partner)) %>%
+  select(-grep("Blast|MRD", colnames(.), ignore.case = TRUE)) %>%
+  mutate(OS.ID=ifelse(OS.event.ID =="Alive", 0, 1), 
+         Event.ID=ifelse(EFS.event.type.ID=="Censored", 0, 1)) %>%
+  bind_rows(., CDE.1031.sub) %>%
+  
+  #change factor levels for analysis
+  mutate(KMT2A.Fusion.Partner_2=factor(ifelse(is.na(KMT2A.Fusion.Partner), "OtherAML", KMT2A.Fusion.Partner), 
+                                       levels=c("OtherAML",
+                                                "ELL", 
+                                                "MLLT1",
+                                                "MLLT10",
+                                                "MLLT11",
+                                                "MLLT3",
+                                                "MLLT4",
+                                                "SEPT6")),
+         
+         KMT2A.Prognosis_2=factor(ifelse(is.na(KMT2A.Prognosis), "OtherAML", KMT2A.Prognosis), levels = c("OtherAML",
+                                                                                                          "Good",
+                                                                                                          "Poor",
+                                                                                                          "Unknown"))) %>%
+  mutate(X=rep("AML", nrow(.)))
+
+dim(KMT2A.sub)   #991
+# KMT2A.sub
+```
+
+```{r}
+table(KMT2A.sub$KMT2A.Fusion.Partner_2, useNA = "always")
+table(KMT2A.sub$KMT2A.Prognosis_2, useNA = "always")
+```
+
+
+#Survival Analysis
+
+
+```{r}
+OS.cols <- c("OS.time..days.", "OS.ID")
+EFS.cols <- c("EFS.time..days.", "Event.ID")
+```
+
+
+```{r}
+OS.byGroup <- SurvObjects(df=KMT2A.sub, colNames = OS.cols, group="KMT2A.Fusion.Partner_2",time = "DtoY")
+EFS.byGroup <- SurvObjects(df=KMT2A.sub, colNames = OS.cols, group="KMT2A.Fusion.Partner_2",time = "DtoY")
+```
+
+
+```{r}
+# summary(OS$survFit)
+summary(OS.byGroup$CoxPH)
+```
+
+##By Prognosis Group in Literature
+
+```{r}
+OS.prog <- SurvObjects(df=KMT2A.sub, colNames = EFS.cols, group="KMT2A.Prognosis_2",time = "DtoY")
+EFS.prog <- SurvObjects(df=KMT2A.sub, colNames = EFS.cols, group="KMT2A.Prognosis_2",time = "DtoY")
+```
+
+```{r}
+summary(OS.prog$CoxPH)
+```
+```{r}
+summary(OS.prog$survFit, times=c(0,3,5))
+```
+
+
+#Kaplan-Meier Plots 
+
+```{r}
+KM <- KM.plots(df=KMT2A.sub,
+                     groupBy = "X", 
+                     type = "OS",
+                     covariate = "KMT2A.Fusion.Partner_2", 
+                     cohort = "1031")
+
+KM
+```
+
+```{r fig.height=5, fig.width=8}
+KM$OS
+KM$EFS
+```
+
+
+
+```{r}
+KM.only <- KM.plots(df=subset(KMT2A.sub,KMT2A.Fusion.Partner_2 != "OtherAML"),
+                     groupBy = "X", 
+                     type = "OS",
+                     covariate = "KMT2A.Fusion.Partner_2", 
+                     cohort = "1031")
+KM.only$OS
+KM.only$EFS
+```
+
+```{r}
+KM.only.known.outcome <- KM.plots(df=subset(KMT2A.sub,!grepl("OtherAML|MLLT3|MLLT4", KMT2A.sub$KMT2A.Fusion.Partner_2)),
+                     groupBy = "X", 
+                     type = "OS",
+                     covariate = "KMT2A.Fusion.Partner_2", 
+                     cohort = "1031")
+
+KM.only.known.outcome$OS
+KM.only.known.outcome$EFS
+```
+
+
+
+##Based on Prognosis
+
+```{r}
+table(KMT2A.sub$KMT2A.Fusion.Partner_2, KMT2A.sub$KMT2A.Prognosis_2)
+```
+
+
+```{r}
+Prog.KM <- KM.plots(df=subset(KMT2A.sub,KMT2A.Prognosis_2 != "Unknown"),
+                     groupBy = "X", 
+                     type = "OS",
+                     covariate = "KMT2A.Prognosis_2", 
+                     cohort = "1031")
+
+Prog.KM$OS
+Prog.KM$EFS
+# saveMultiPlots(KMT2A.Prog.KM)
+```
+
+
+```{r}
+Prog.Only.KM <- KM.plots(df=subset(KMT2A.sub,KMT2A.Prognosis_2 != "Unknown" & KMT2A.Prognosis_2 != "OtherAML"),
+                     groupBy = "X", 
+                     type = "OS",
+                     covariate = "KMT2A.Prognosis_2", 
+                     cohort = "1031")
+
+Prog.Only.KM$OS
+Prog.Only.KM$EFS
+
+# saveMultiPlots(Prog.Only.KM)
+```
+
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+

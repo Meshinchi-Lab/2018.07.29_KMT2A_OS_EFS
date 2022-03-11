@@ -1,0 +1,159 @@
+---
+title: ""
+author: "Jenny Smith"
+date: ""
+output: html_document
+---
+
+# Set-up 
+
+```{r setup, cache = FALSE, include = FALSE}
+require(knitr)
+knitr::opts_knit$set(root.dir = file.path(TARGET,"Clinical/analysis/2018.07.29_KMT2A_OS_EFS"))
+```
+
+```{r}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),
+                      tidy=TRUE,
+                      fig.align='center',
+                      fig.width = 10, fig.height = 10)
+node=Sys.info()[["nodename"]]
+if(!grepl("local", node)){
+  print(node)
+  options(bitmapType = 'cairo')
+  grDevices::X11.options(type='cairo')
+}
+
+options(stringsAsFactors = FALSE)
+table = function (..., useNA = 'ifany') base::table(..., useNA = useNA)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+
+library(ggplot2)
+library(gridExtra)
+
+library(dplyr)
+library(tidyr)
+library(tibble)
+
+
+library(DeGSEA)
+library(REDCapR)
+# library(keyring) #cannot install non-zero exit 
+
+getwd()
+```
+
+```{r}
+x_cts_file <- "NA"
+x_TPM_file <- "NA"
+```
+
+```{r message=FALSE}
+#https://cran.r-project.org/web/packages/REDCapR/vignettes/workflow-read.html 
+project <- "KMT2A_Outcome_1031"
+
+if(project==""){
+  stop("Must include Projecy name!")
+}else{
+  message(paste0("Project is: ",project))
+  current_cde_database <- paste("TARGET_AML_CDEs_For_Project",project, Sys.Date(),".RDS", sep="_")
+  
+  if(file.exists(current_cde_database)){
+    print("Reading CDEs from Rdata object.")
+    merged <- readRDS(current_cde_database)
+      
+  }else{
+    print("Downloading CDEs from RedCap API.")
+    path_credential <- file.path(HOME,".redcap")
+    project_id <- 1295
+  
+    credential  <- REDCapR::retrieve_credential_local(
+      path_credential = path_credential,
+      project_id = project_id)
+    
+    #takes about 30 sec to download. 
+    merged <- redcap_read(redcap_uri = credential$redcap_uri, 
+                          token = credential$token, 
+                          raw_or_label_headers = 'label')
+    if(merged$success){
+      merged <- data.frame(merged$data, check.names=TRUE) #remove the white spaces  (will this even work??)
+      saveRDS(merged, current_cde_database)
+    }
+    
+    #Create a simple log file from the day the project starts
+    cat(c(paste("Date:", Sys.Date()),
+          paste("cts:", basename(get(ls(pattern = "_cts_file")))),
+          paste("tpm:", basename(get(ls(pattern = "_TPM_file")))), 
+          paste("CDE:", current_cde_database)),
+          sep = "\n", 
+          file = paste(project, Sys.Date(), ".log", sep="_"))
+    
+  }
+  
+  #keep a list of the ineligable patiens to remove if necessary
+  inelig <- merged %>% 
+    filter(Eligibility.Comments == "remove") %>% 
+    pull(USI)
+  
+  #Filter those with USIs and are eligible for the study
+  merged <- merged %>% 
+    filter(Eligibility.Comments != "remove")
+  
+  
+  dim(merged) 
+  head(merged)
+}
+```
+
+
+```{r}
+# sample_info <- read.csv(file.path(TARGET, "SequencingDataMatrix/TARGET_AML_Ribodepleted_Manifest_08.12.21.csv")) 
+# 
+# dim(sample_info)
+```
+
+# KM 
+
+```{r}
+KMT2A_1031 <- merged %>% 
+  filter(Protocol=="AAML1031", !is.na(EFS.time..days.)) %>% 
+  mutate(KMT2A=case_when(
+    grepl("KMT2A",Primary.Fusion) | grepl("KMT2A", Additional.CNV.or.Fusion) ~ "KMT2A", 
+    TRUE ~ "Other AML"
+  )) %>% 
+  rename_at(vars(Recoded.OS.ID, Recoded.Event.ID), ~c("OS.ID", "Event.ID"))
+
+
+table(KMT2A_1031$KMT2A)
+# table(KMT2A_1031$Protocol)
+# table(KMT2A_1031$Recoded.Event.ID)
+```
+
+```{r}
+kmt2a_all <- KM.plots(df=KMT2A_1031, 
+                      group_vars = NULL, 
+                      type="OS", 
+                      covariate = "KMT2A", 
+                      cohort="1031", 
+                      cc=c("KMT2A"="dodgerblue", "Other AML"="darkgrey"),
+                      riskTable = TRUE)
+
+# kmt2a_all
+```
+
+```{r fig.height=6, fig.width=12}
+# pdf("TARGET_AML_AAML1031_KMT2A_OS_EFS_10.15.2021.pdf", height = 8, width = 13)
+# grid.arrange(grobs=c(kmt2a_all$OS, kmt2a_all$EFS), ncol=2)
+# dev.off()
+```
+
+#Session Information
+
+```{r}
+sessionInfo()
+```
+
